@@ -1,0 +1,303 @@
+<!doctype html>
+<html lang="zh-TW">
+<head>
+  <meta charset="utf-8">
+  <title>格子地圖</title>
+  <style>
+    table { border-collapse: collapse; margin: 20px 0; }
+    td {
+      width: 50px;
+      height: 50px;
+      border: 1px solid #333;
+      position: relative;
+      text-align: center;
+      vertical-align: middle;
+      cursor: pointer;
+      transition: background-color 0.3s;
+    }
+    .start { background-color: green; }
+    .end { background-color: red; }
+    .obstacle { background-color: grey; }
+    /* 中央編號 */
+    .cell-number {
+      position: absolute;
+      width: 100%;
+      top: 50%;
+      transform: translateY(-50%);
+      pointer-events: none;
+    }
+    /* 右上角最佳政策箭頭 */
+    .cell-policy {
+      position: absolute;
+      top: 2px;
+      right: 2px;
+      font-size: 16px;
+      pointer-events: none;
+    }
+    /* 左下角狀態價值 */
+    .cell-value {
+      position: absolute;
+      bottom: 2px;
+      left: 2px;
+      font-size: 12px;
+      pointer-events: none;
+    }
+    /* 框出最短路徑 */
+    .shortest-path {
+      outline: 2px dashed blue;
+    }
+  </style>
+</head>
+<body>
+  <h1>格子地圖 ({{ n }} x {{ n }})</h1>
+  <table id="gridTable">
+  {% for row in grid %}
+    <tr>
+    {% for cell in row %}
+      <td id="cell-{{ cell.row }}-{{ cell.col }}" data-row="{{ cell.row }}" data-col="{{ cell.col }}">
+        <div class="cell-number">{{ cell.row * n + cell.col + 1 }}</div>
+        <div class="cell-policy"></div>
+        <div class="cell-value"></div>
+      </td>
+    {% endfor %}
+    </tr>
+  {% endfor %}
+  </table>
+  
+  <button onclick="placeRandomObstacles()">隨機放置障礙物</button>
+  <button onclick="resetGrid()">重設</button>
+  <button onclick="evaluatePolicy()">計算最佳政策與價值</button>
+  
+  <script>
+    // 記錄是否已設定起點與終點
+    let startSet = false;
+    let endSet = false;
+    let gridSize = {{ n }};
+    
+    // 為所有格子加入點擊事件
+    document.querySelectorAll('td').forEach(function(cell) {
+      cell.addEventListener('click', function() {
+        // 若尚未設定起點，則設定為起點（綠色）
+        if (!startSet) {
+          cell.classList.add('start');
+          startSet = true;
+        }
+        // 若起點已設定且尚未設定終點，點擊非起點的格子則設定為終點（紅色）
+        else if (!endSet && !cell.classList.contains('start')) {
+          cell.classList.add('end');
+          endSet = true;
+        }
+        // 若該格既非起點也非終點，則嘗試切換障礙物狀態
+        else if (!cell.classList.contains('start') && !cell.classList.contains('end')) {
+          // 若該格已是障礙物，則移除障礙物
+          if (cell.classList.contains('obstacle')) {
+            cell.classList.remove('obstacle');
+          } else {
+            // 取得目前障礙物數量
+            let obstacles = document.querySelectorAll('td.obstacle').length;
+            // 只允許最多放置 gridSize - 2 個障礙物
+            if (obstacles < gridSize - 2) {
+              cell.classList.add('obstacle');
+            } else {
+              alert("最多只能放置 " + (gridSize - 2) + " 個障礙物！");
+            }
+          }
+        }
+      });
+    });
+    
+    // 重設所有格子，並重置起點、終點狀態及顯示內容
+    function resetGrid() {
+      startSet = false;
+      endSet = false;
+      document.querySelectorAll('td').forEach(function(cell) {
+        cell.classList.remove('start', 'end', 'obstacle', 'shortest-path');
+        // 清除策略與價值顯示
+        let policyDiv = cell.querySelector('.cell-policy');
+        if (policyDiv) policyDiv.innerText = "";
+        let valueDiv = cell.querySelector('.cell-value');
+        if (valueDiv) valueDiv.innerText = "";
+      });
+    }
+    
+    // 隨機放置 gridSize-2 個障礙物（排除已設定的起點與終點）
+    function placeRandomObstacles() {
+      // 先移除現有的障礙物
+      document.querySelectorAll('td.obstacle').forEach(cell => cell.classList.remove('obstacle'));
+      let obstacleCount = gridSize - 2;
+      let cells = Array.from(document.querySelectorAll('td'));
+      // 過濾掉起點與終點
+      cells = cells.filter(cell => !cell.classList.contains('start') && !cell.classList.contains('end'));
+      // 隨機打亂陣列
+      cells.sort(() => Math.random() - 0.5);
+      // 為前 obstacleCount 個格子設定障礙物
+      for (let i = 0; i < obstacleCount && i < cells.length; i++) {
+        cells[i].classList.add('obstacle');
+      }
+    }
+    
+    // 使用價值迭代算法計算最佳政策與狀態價值 V(s)
+    function evaluatePolicy() {
+      const gamma = 0.9;
+      const iterations = 50;
+      const actions = ["↑", "↓", "←", "→"];
+      
+      // 初始化二維陣列，存放最佳政策與狀態價值
+      let policyGrid = [];
+      let valueGrid = [];
+      for (let i = 0; i < gridSize; i++) {
+        policyGrid[i] = [];
+        valueGrid[i] = [];
+        for (let j = 0; j < gridSize; j++) {
+          let cell = document.getElementById("cell-" + i + "-" + j);
+          // 障礙物：不計算，顯示 N/A
+          if (cell.classList.contains("obstacle")) {
+            policyGrid[i][j] = "";
+            valueGrid[i][j] = "N/A";
+          }
+          // 終點：視為終止狀態，價值固定為 0
+          else if (cell.classList.contains("end")) {
+            policyGrid[i][j] = "";
+            valueGrid[i][j] = 0;
+          }
+          else {
+            policyGrid[i][j] = "";
+            valueGrid[i][j] = 0;  // 初始值
+          }
+        }
+      }
+      
+      // 進行價值迭代更新
+      for (let iter = 0; iter < iterations; iter++) {
+        let newValues = [];
+        for (let i = 0; i < gridSize; i++) {
+          newValues[i] = [];
+          for (let j = 0; j < gridSize; j++) {
+            let cell = document.getElementById("cell-" + i + "-" + j);
+            // 障礙物與終點狀態不更新
+            if (cell.classList.contains("obstacle") || cell.classList.contains("end")) {
+              newValues[i][j] = valueGrid[i][j];
+            } else {
+              let bestValue = -Infinity;
+              let bestAction = "";
+              // 遍歷每個可能行動，計算候選值
+              for (let action of actions) {
+                let ni = i, nj = j;
+                if (action === "↑") {
+                  if (i - 1 >= 0) {
+                    let nextCell = document.getElementById("cell-" + (i - 1) + "-" + j);
+                    if (!nextCell.classList.contains("obstacle"))
+                      ni = i - 1;
+                  }
+                } else if (action === "↓") {
+                  if (i + 1 < gridSize) {
+                    let nextCell = document.getElementById("cell-" + (i + 1) + "-" + j);
+                    if (!nextCell.classList.contains("obstacle"))
+                      ni = i + 1;
+                  }
+                } else if (action === "←") {
+                  if (j - 1 >= 0) {
+                    let nextCell = document.getElementById("cell-" + i + "-" + (j - 1));
+                    if (!nextCell.classList.contains("obstacle"))
+                      nj = j - 1;
+                  }
+                } else if (action === "→") {
+                  if (j + 1 < gridSize) {
+                    let nextCell = document.getElementById("cell-" + i + "-" + (j + 1));
+                    if (!nextCell.classList.contains("obstacle"))
+                      nj = j + 1;
+                  }
+                }
+                // 每走一步的獎勵 R = -1，若移動受阻則停留在原地
+                let candidateValue = -1 + gamma * (typeof valueGrid[ni][nj] === "number" ? valueGrid[ni][nj] : 0);
+                if (candidateValue > bestValue) {
+                  bestValue = candidateValue;
+                  bestAction = action;
+                }
+              }
+              newValues[i][j] = bestValue;
+              policyGrid[i][j] = bestAction;
+            }
+          }
+        }
+        valueGrid = newValues;
+      }
+      
+      // 更新每個格子的顯示，右上角顯示最佳行動箭頭，左下角顯示狀態價值
+      for (let i = 0; i < gridSize; i++) {
+        for (let j = 0; j < gridSize; j++) {
+          let cell = document.getElementById("cell-" + i + "-" + j);
+          let policyDiv = cell.querySelector('.cell-policy');
+          let valueDiv = cell.querySelector('.cell-value');
+          policyDiv.innerText = policyGrid[i][j];
+          if (valueGrid[i][j] === "N/A") {
+            valueDiv.innerText = "N/A";
+          } else {
+            valueDiv.innerText = valueGrid[i][j].toFixed(2);
+          }
+        }
+      }
+      
+      // 呼叫函數依據最佳政策框出從起點到終點的最短路徑
+      highlightPath(policyGrid);
+    }
+    
+    // 根據最佳政策框出最短路徑
+    function highlightPath(policyGrid) {
+      let startCell = document.querySelector("td.start");
+      let endCell = document.querySelector("td.end");
+      if (!startCell || !endCell) {
+        alert("請先設定起點和終點！");
+        return;
+      }
+      let sx = parseInt(startCell.getAttribute("data-row"));
+      let sy = parseInt(startCell.getAttribute("data-col"));
+      let ex = parseInt(endCell.getAttribute("data-row"));
+      let ey = parseInt(endCell.getAttribute("data-col"));
+      
+      // 移除先前的最短路徑標記
+      document.querySelectorAll('.shortest-path').forEach(cell => cell.classList.remove('shortest-path'));
+      
+      let visited = new Set();
+      let path = [];
+      let curX = sx, curY = sy;
+      while (true) {
+        let cellId = "cell-" + curX + "-" + curY;
+        path.push(cellId);
+        visited.add(cellId);
+        if (curX === ex && curY === ey) {
+          break;
+        }
+        let action = policyGrid[curX][curY];
+        if (!action) break;  // 若無動作，則結束
+        let nextX = curX, nextY = curY;
+        if (action === "↑") {
+          nextX = curX - 1;
+        } else if (action === "↓") {
+          nextX = curX + 1;
+        } else if (action === "←") {
+          nextY = curY - 1;
+        } else if (action === "→") {
+          nextY = curY + 1;
+        }
+        let nextCellId = "cell-" + nextX + "-" + nextY;
+        // 若下一格不存在、為障礙物或已走過，則結束迴圈
+        let nextCell = document.getElementById(nextCellId);
+        if (!nextCell || nextCell.classList.contains("obstacle") || visited.has(nextCellId)) {
+          break;
+        }
+        curX = nextX;
+        curY = nextY;
+      }
+      
+      // 為沿途格子加上標記
+      for (let cellId of path) {
+        let cell = document.getElementById(cellId);
+        if (cell) {
+          cell.classList.add("shortest-path");
+        }
+      }
+    }
+  </script>
+</body>
+</html>
